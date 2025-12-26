@@ -1,6 +1,6 @@
 {
   "name": "@aganitha/reporting-framework",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Plugin-based framework for LLM-powered report generation",
   "type": "module",
   "main": "./dist/index.js",

@@ -1,12 +1,83 @@
 /**
  * Framework Plugin Interface
  *
- * All plugins must implement this interface.
- * This contract defines what the framework expects from every plugin.
+ * Defines the contract that all plugins must implement.
+ * Plugins can support file ingestion, API ingestion, or both.
  */
 
 import type { Bundle } from "../bundles/types.js";
-import type { LLMClient } from "../llm/llm-config";
+import type { LLMClient } from "../llm/llm-config.js";
+
+/**
+ * Query object for API-based ingestion
+ * Plugins can extend this type for their specific needs
+ */
+export interface APIQuery {
+  /** Raw query parameters (plugin-specific) */
+  [key: string]: any;
+}
+
+/**
+ * Result of API ingestion with metadata
+ */
+export interface APIIngestionResult<T = any> {
+  /** The standardized bundle */
+  bundle: Bundle<T>;
+
+  /** API-specific metadata */
+  apiMetadata?: {
+    /** API endpoint used */
+    endpoint?: string;
+
+    /** HTTP status code */
+    statusCode?: number;
+
+    /** Rate limit information */
+    rateLimit?: {
+      remaining: number;
+      reset: Date;
+      limit?: number;
+    };
+
+    /** Request timestamp */
+    requestedAt: Date;
+
+    /** Response timestamp */
+    respondedAt: Date;
+
+    /** Response time in milliseconds */
+    responseTime?: number;
+
+    /** Any additional API-specific data */
+    [key: string]: any;
+  };
+}
+
+/**
+ * Ingestion capabilities that a plugin supports
+ */
+export interface IngestionCapabilities {
+  /** Can ingest from files */
+  file: boolean;
+
+  /** Can ingest from APIs/databases */
+  api: boolean;
+
+  /** Supported file formats (if file: true) */
+  fileFormats?: string[];
+
+  /** API endpoints available (if api: true) */
+  apiEndpoints?: string[];
+
+  /** Optional: Maximum file size in bytes (for file ingestion) */
+  maxFileSize?: number;
+
+  /** Optional: Rate limit info (for API ingestion) */
+  apiRateLimit?: {
+    requestsPerMinute?: number;
+    requestsPerHour?: number;
+  };
+}
 
 /**
  * Plugin specification defines how to generate a report
@@ -51,6 +122,15 @@ export interface PluginReport {
   };
 }
 
+/**
+ * Framework Plugin Interface
+ *
+ * At least ONE of the following methods MUST be implemented:
+ * - ingestFromFile()
+ * - ingestFromAPI()
+ *
+ * Use getIngestionCapabilities() to declare which methods are supported.
+ */
 export interface FrameworkPlugin {
   /**
    * Unique identifier for this plugin
@@ -89,13 +169,132 @@ export interface FrameworkPlugin {
     llmClient: LLMClient
   ): Promise<PluginReport>;
 
+  // ============================================================================
+  // INGESTION METHODS (At least ONE must be implemented)
+  // ============================================================================
+
   /**
    * Ingest data from a file and return a standardized Bundle
    *
+   * OPTIONAL: Only implement if your plugin supports file-based ingestion
+   *
    * @param filePath - Path to the input file
    * @returns Promise<Bundle> - Standardized data container
+   *
+   * @example
+   * ```
+   * // XML file upload
+   * const bundle = await plugin.ingestFromFile('./pubmed-articles.xml');
+   *
+   * // CSV file upload
+   * const bundle = await plugin.ingestFromFile('./patents.csv');
+   * ```
    */
-  ingestFromFile(filePath: string): Promise<Bundle<any>>;
+  ingestFromFile?(filePath: string): Promise<Bundle<any>>;
+
+  /**
+   * Ingest data from a remote API/database and return a standardized Bundle
+   *
+   * OPTIONAL: Only implement if your plugin supports API-based ingestion
+   *
+   * @param query - Plugin-specific query parameters
+   * @returns APIIngestionResult with bundle and metadata
+   *
+   * @throws {APIIngestionError} If the API request fails
+   *
+   * @example
+   * ```
+   * // PubMed search
+   * const result = await plugin.ingestFromAPI({
+   *   term: "machine learning",
+   *   maxResults: 100
+   * });
+   *
+   * // Database query
+   * const result = await plugin.ingestFromAPI({
+   *   sql: "SELECT * FROM articles WHERE year > 2020"
+   * });
+   *
+   * // Weather API
+   * const result = await plugin.ingestFromAPI({
+   *   location: "San Francisco",
+   *   days: 7
+   * });
+   * ```
+   */
+  ingestFromAPI?(query: APIQuery): Promise<APIIngestionResult<any>>;
+
+  /**
+   * Get ingestion capabilities of this plugin
+   *
+   * REQUIRED: Declares which ingestion methods are supported
+   * Must return at least one capability as true
+   *
+   * @returns IngestionCapabilities object
+   *
+   * @example
+   * ```
+   * // File-only plugin
+   * getIngestionCapabilities() {
+   *   return {
+   *     file: true,
+   *     api: false,
+   *     fileFormats: ['xml', 'json', 'csv']
+   *   };
+   * }
+   *
+   * // API-only plugin
+   * getIngestionCapabilities() {
+   *   return {
+   *     file: false,
+   *     api: true,
+   *     apiEndpoints: ['search', 'fetch-by-id']
+   *   };
+   * }
+   *
+   * // Hybrid plugin (supports both)
+   * getIngestionCapabilities() {
+   *   return {
+   *     file: true,
+   *     api: true,
+   *     fileFormats: ['xml'],
+   *     apiEndpoints: ['search']
+   *   };
+   * }
+   * ```
+   */
+  getIngestionCapabilities(): IngestionCapabilities;
+
+  /**
+   * Get API query schema (if API ingestion is supported)
+   *
+   * Returns a JSON Schema describing expected query format.
+   * Useful for UI generation and validation.
+   *
+   * @returns JSON Schema object
+   *
+   * @example
+   * ```
+   * getAPIQuerySchema() {
+   *   return {
+   *     type: "object",
+   *     properties: {
+   *       term: { type: "string", description: "Search term" },
+   *       maxResults: { type: "number", default: 100, maximum: 1000 },
+   *       dateRange: {
+   *         type: "object",
+   *         properties: {
+   *           from: { type: "string", format: "date" },
+   *           to: { type: "string", format: "date" }
+   *         }
+   *       }
+   *     },
+   *     required: ["term"]
+   *   };
+   * }
+   * ```
+   */
+  getAPIQuerySchema?(): Record<string, any>;
 
   /**
    * Return all available specifications for this plugin
@@ -128,4 +327,68 @@ export interface PluginMetadata {
   description: string;
   author?: string;
   specifications: string[]; // Available specification IDs
+  capabilities: IngestionCapabilities;
+}
+
+// ============================================================================
+// ERROR CLASSES
+// ============================================================================
+
+/**
+ * Error thrown when API ingestion fails
+ */
+export class APIIngestionError extends Error {
+  constructor(
+    message: string,
+    public statusCode?: number,
+    public endpoint?: string,
+    public originalError?: Error
+  ) {
+    super(message);
+    this.name = "APIIngestionError";
+
+    // Maintain proper stack trace
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, APIIngestionError);
+    }
+  }
+}
+
+/**
+ * Error thrown when plugin doesn't support requested ingestion method
+ */
+export class UnsupportedIngestionError extends Error {
+  constructor(
+    public pluginId: string,
+    public requestedMethod: "file" | "api",
+    public supportedCapabilities: IngestionCapabilities
+  ) {
+    const supported: string[] = [];
+    if (supportedCapabilities.file) supported.push("file");
+    if (supportedCapabilities.api) supported.push("api");
+
+    super(
+      `Plugin "${pluginId}" does not support ${requestedMethod} ingestion. ` +
+        `Supported methods: ${supported.join(", ")}`
+    );
+    this.name = "UnsupportedIngestionError";
+
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, UnsupportedIngestionError);
+    }
+  }
+}
+
+/**
+ * Error thrown when plugin validation fails
+ */
+export class PluginValidationError extends Error {
+  constructor(public pluginId: string, public errors: string[]) {
+    super(`Plugin "${pluginId}" validation failed:\n` + errors.join("\n"));
+    this.name = "PluginValidationError";
+
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, PluginValidationError);
+    }
+  }
 }

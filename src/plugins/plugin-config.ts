@@ -314,7 +314,11 @@ export function generateClassNameFromId(pluginId: string): string {
   const pascalCase = parts
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
     .join("");
-  return `${pascalCase}Plugin`;
+  // Return a PascalCase class name derived from the id. If the id already
+  // contains the word "plugin" (e.g. "my-plugin") the resulting PascalCase
+  // will naturally include "Plugin" (e.g. "MyPlugin"). Do not append an
+  // additional "Plugin" suffix to avoid producing "MyPluginPlugin".
+  return pascalCase;
 }
 
 /**

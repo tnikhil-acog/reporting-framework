@@ -1,214 +1,246 @@
 /**
  * Plugin Registry
  *
- * Manages the discovery, registration, and retrieval of plugins.
- * This is the central hub for plugin management.
+ * Central registry for all plugins.
+ * Handles plugin registration, validation, and discovery.
  */
 
-import type { FrameworkPlugin, PluginMetadata } from "./plugin-interface.js";
+import type {
+  FrameworkPlugin,
+  PluginMetadata,
+  IngestionCapabilities,
+} from "./plugin-interface.js";
+import { PluginValidationError } from "./plugin-interface.js";
+import {
+  validatePlugin,
+  type PluginValidationResult,
+} from "./plugin-validation.js";
 
-const log = (message: string) =>
-  console.debug(`[framework:plugins:registry] ${message}`);
-
+/**
+ * Plugin Registry - Manages plugin lifecycle
+ */
 export class PluginRegistry {
   private plugins: Map<string, FrameworkPlugin> = new Map();
 
   /**
-   * Register a plugin with the registry
+   * Register a plugin with validation
    *
-   * @param plugin - The plugin instance to register
-   * @throws Error if a plugin with the same ID is already registered
-   *
-   * @example
-   * ```typescript
-   * const registry = new PluginRegistry();
-   * const patentPlugin = new PatentPlugin();
-   * registry.register(patentPlugin);
-   * ```
+   * @param plugin - Plugin instance to register
+   * @throws {PluginValidationError} If validation fails
    */
   register(plugin: FrameworkPlugin): void {
+    // Validate plugin before registration
+    const validation = validatePlugin(plugin);
+
+    if (!validation.valid) {
+      throw new PluginValidationError(plugin.id, validation.errors);
+    }
+
+    // Log warnings if any
+    if (validation.warnings.length > 0) {
+      console.warn(
+        `[PluginRegistry] Plugin "${plugin.id}" validation warnings:`
+      );
+      validation.warnings.forEach((warning) => console.warn(`  - ${warning}`));
+    }
+
+    // Check for duplicate registration
     if (this.plugins.has(plugin.id)) {
-      throw new Error(
-        `Plugin with ID "${plugin.id}" is already registered. ` +
-          `Existing plugin: ${this.plugins.get(plugin.id)?.version}`
+      console.warn(
+        `[PluginRegistry] Plugin "${plugin.id}" is already registered. Overwriting.`
       );
     }
 
     this.plugins.set(plugin.id, plugin);
-    log(`✅ Registered plugin: ${plugin.id} v${plugin.version}`);
+    console.log(
+      `[PluginRegistry] ✓ Plugin "${plugin.id}" registered successfully`
+    );
   }
 
   /**
-   * Register multiple plugins at once
+   * Unregister a plugin
    *
-   * @param plugins - Array of plugin instances
-   *
-   * @example
-   * ```typescript
-   * registry.registerBulk([patentPlugin, pubmedPlugin, staffingPlugin]);
-   * ```
+   * @param pluginId - ID of plugin to unregister
+   * @returns true if plugin was unregistered, false if not found
    */
-  registerBulk(plugins: FrameworkPlugin[]): void {
-    for (const plugin of plugins) {
-      this.register(plugin);
+  unregister(pluginId: string): boolean {
+    const existed = this.plugins.has(pluginId);
+    this.plugins.delete(pluginId);
+    if (existed) {
+      console.log(`[PluginRegistry] Plugin "${pluginId}" unregistered`);
     }
+    return existed;
   }
 
   /**
    * Get a plugin by ID
    *
-   * @param id - Plugin ID (e.g., "patent", "pubmed")
-   * @returns The plugin instance
-   * @throws Error if plugin is not found
-   *
-   * @example
-   * ```typescript
-   * const plugin = registry.getPlugin("patent");
-   * const bundle = await plugin.ingestFromFile("patents.csv");
-   * ```
+   * @param pluginId - Plugin ID to retrieve
+   * @returns Plugin instance or undefined if not found
    */
-  getPlugin(id: string): FrameworkPlugin {
-    const plugin = this.plugins.get(id);
-    if (!plugin) {
-      const available = Array.from(this.plugins.keys());
-      throw new Error(
-        `Plugin not found: "${id}"\n` +
-          `Available plugins: ${available.join(", ") || "(none registered)"}`
-      );
-    }
-    return plugin;
-  }
-
-  /**
-   * Get all registered plugins
-   *
-   * @returns Array of all plugin instances
-   *
-   * @example
-   * ```typescript
-   * const allPlugins = registry.getAllPlugins();
-   * console.log(`Found ${allPlugins.length} plugins`);
-   * ```
-   */
-  getAllPlugins(): FrameworkPlugin[] {
-    return Array.from(this.plugins.values());
-  }
-
-  /**
-   * List all registered plugins (alias for getAllPlugins)
-   *
-   * @returns Array of all plugin instances
-   */
-  listPlugins(): FrameworkPlugin[] {
-    return this.getAllPlugins();
-  }
-
-  /**
-   * Get plugin IDs
-   *
-   * @returns Array of all registered plugin IDs
-   *
-   * @example
-   * ```typescript
-   * const ids = registry.getPluginIds();
-   * // Returns: ["patent", "pubmed", "staffing"]
-   * ```
-   */
-  getPluginIds(): string[] {
-    return Array.from(this.plugins.keys());
+  getPlugin(pluginId: string): FrameworkPlugin | undefined {
+    return this.plugins.get(pluginId);
   }
 
   /**
    * Check if a plugin is registered
    *
-   * @param id - Plugin ID
-   * @returns true if the plugin exists, false otherwise
-   *
-   * @example
-   * ```typescript
-   * if (registry.hasPlugin("patent")) {
-   *   const plugin = registry.getPlugin("patent");
-   * }
-   * ```
+   * @param pluginId - Plugin ID to check
+   * @returns true if plugin is registered
    */
-  hasPlugin(id: string): boolean {
-    return this.plugins.has(id);
+  hasPlugin(pluginId: string): boolean {
+    return this.plugins.has(pluginId);
   }
 
   /**
-   * Get metadata for all plugins (for discovery/listing)
+   * List all registered plugins
    *
-   * @returns Array of plugin metadata
-   *
-   * @example
-   * ```typescript
-   * const allMetadata = registry.getAllPluginMetadata();
-   * // Use for UI plugin grid, CLI help text, etc.
-   * ```
+   * @returns Array of plugin instances
    */
-  getAllPluginMetadata(): PluginMetadata[] {
-    return Array.from(this.plugins.values()).map((plugin: FrameworkPlugin) => ({
+  listPlugins(): FrameworkPlugin[] {
+    return Array.from(this.plugins.values());
+  }
+
+  /**
+   * Get validation results for a plugin
+   *
+   * @param pluginId - Plugin ID to validate
+   * @returns Validation result or null if plugin not found
+   */
+  validatePlugin(pluginId: string): PluginValidationResult | null {
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin) return null;
+    return validatePlugin(plugin);
+  }
+
+  /**
+   * List plugins with their capabilities
+   *
+   * @returns Array of plugin metadata with capabilities
+   */
+  listPluginsWithCapabilities(): Array<{
+    id: string;
+    version: string;
+    description: string;
+    capabilities: IngestionCapabilities;
+  }> {
+    return Array.from(this.plugins.values()).map((plugin) => ({
       id: plugin.id,
       version: plugin.version,
       description: plugin.description,
-      specifications: Object.keys(plugin.getSpecifications()),
+      capabilities: plugin.getIngestionCapabilities(),
     }));
   }
 
   /**
-   * Get metadata for a specific plugin
+   * Get plugin metadata
    *
-   * @param id - Plugin ID
-   * @returns Plugin metadata
-   * @throws Error if plugin is not found
-   *
-   * @example
-   * ```typescript
-   * const metadata = registry.getPluginMetadata("patent");
-   * console.log(metadata.specifications);
-   * // ["patent_report", "patent_summary", "market_analysis"]
-   * ```
+   * @param pluginId - Plugin ID
+   * @returns Plugin metadata or undefined if not found
    */
-  getPluginMetadata(id: string): PluginMetadata {
-    const plugin = this.getPlugin(id);
+  getPluginMetadata(pluginId: string): PluginMetadata | undefined {
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin) return undefined;
+
+    const specs = plugin.getSpecifications();
+
     return {
       id: plugin.id,
       version: plugin.version,
       description: plugin.description,
-      specifications: Object.keys(plugin.getSpecifications()),
+      specifications: Object.keys(specs),
+      capabilities: plugin.getIngestionCapabilities(),
     };
   }
 
   /**
-   * Unregister a plugin (useful for testing)
+   * Get all plugin metadata
    *
-   * @param id - Plugin ID
-   * @returns true if plugin was unregistered, false if it didn't exist
-   *
-   * @example
-   * ```typescript
-   * registry.unregister("patent");
-   * ```
+   * @returns Array of plugin metadata
    */
-  unregister(id: string): boolean {
-    const hadPlugin = this.plugins.has(id);
-    if (hadPlugin) {
-      this.plugins.delete(id);
-      log(`❌ Unregistered plugin: ${id}`);
-    }
-    return hadPlugin;
+  getAllMetadata(): PluginMetadata[] {
+    return Array.from(this.plugins.values()).map((plugin) => {
+      const specs = plugin.getSpecifications();
+      return {
+        id: plugin.id,
+        version: plugin.version,
+        description: plugin.description,
+        specifications: Object.keys(specs),
+        capabilities: plugin.getIngestionCapabilities(),
+      };
+    });
   }
 
   /**
-   * Clear all registered plugins (useful for testing)
+   * Find plugins by capability
    *
-   * @example
-   * ```typescript
-   * registry.clear();
-   * ```
+   * @param capability - "file" or "api"
+   * @returns Array of plugin IDs that support the capability
+   */
+  findPluginsByCapability(capability: "file" | "api"): string[] {
+    return Array.from(this.plugins.values())
+      .filter((plugin) => {
+        const capabilities = plugin.getIngestionCapabilities();
+        return capability === "file" ? capabilities.file : capabilities.api;
+      })
+      .map((plugin) => plugin.id);
+  }
+
+  /**
+   * Find plugins that support specific file format
+   *
+   * @param format - File format (e.g., "xml", "csv", "json")
+   * @returns Array of plugin IDs that support the format
+   */
+  findPluginsByFileFormat(format: string): string[] {
+    return Array.from(this.plugins.values())
+      .filter((plugin) => {
+        const capabilities = plugin.getIngestionCapabilities();
+        return capabilities.fileFormats?.includes(format.toLowerCase());
+      })
+      .map((plugin) => plugin.id);
+  }
+
+  /**
+   * Clear all registered plugins
    */
   clear(): void {
-    log(`🗑️  Clearing ${this.plugins.size} plugins from registry`);
     this.plugins.clear();
+    console.log("[PluginRegistry] All plugins cleared");
+  }
+
+  /**
+   * Get registry statistics
+   *
+   * @returns Statistics about registered plugins
+   */
+  getStats(): {
+    totalPlugins: number;
+    filePlugins: number;
+    apiPlugins: number;
+    hybridPlugins: number;
+  } {
+    let filePlugins = 0;
+    let apiPlugins = 0;
+    let hybridPlugins = 0;
+
+    for (const plugin of this.plugins.values()) {
+      const capabilities = plugin.getIngestionCapabilities();
+
+      if (capabilities.file && capabilities.api) {
+        hybridPlugins++;
+      } else if (capabilities.file) {
+        filePlugins++;
+      } else if (capabilities.api) {
+        apiPlugins++;
+      }
+    }
+
+    return {
+      totalPlugins: this.plugins.size,
+      filePlugins,
+      apiPlugins,
+      hybridPlugins,
+    };
   }
 }

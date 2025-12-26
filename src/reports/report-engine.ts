@@ -1,28 +1,31 @@
 /**
  * Report Engine
  *
- * Orchestrates report generation by:
- * 1. Loading the YAML specification from the plugin
- * 2. Iterating through each variable in the specification
- * 3. Loading the corresponding prompt template
- * 4. Rendering the prompt with appropriate data
- * 5. Calling the LLM to generate the variable value
- * 6. Building context with generated variables
- * 7. Finally rendering the report template with all variables
+ * Orchestrates report generation with support for both file and API ingestion.
  */
 
 import path from "path";
 import fs from "fs/promises";
 import nunjucks from "nunjucks";
 import yaml from "js-yaml";
-import { FrameworkPlugin, PluginSpec } from "../plugins/plugin-interface.js";
+import type {
+  FrameworkPlugin,
+  PluginSpec,
+  APIQuery,
+  APIIngestionResult,
+} from "../plugins/plugin-interface.js";
+import { UnsupportedIngestionError } from "../plugins/plugin-interface.js";
 import { PluginRegistry } from "../plugins/plugin-registry.js";
+import {
+  supportsFileIngestion,
+  supportsAPIIngestion,
+} from "../plugins/plugin-validation.js";
 import {
   createLLMClient,
   type LLMClient,
   type LLMConfig,
 } from "../llm/llm-client-factory.js";
-import { Bundle } from "../bundles/types.js";
+import type { Bundle } from "../bundles/types.js";
 
 /**
  * Options for report generation
@@ -32,6 +35,20 @@ export interface ReportGenerationOptions {
   llmConfig: LLMConfig;
   specificationId: string;
   bundle: Bundle;
+}
+
+/**
+ * Options for data ingestion
+ */
+export interface DataIngestionOptions {
+  /** Ingestion type */
+  type: "file" | "api";
+
+  /** File path (required for file ingestion) */
+  filePath?: string;
+
+  /** Query parameters (required for API ingestion) */
+  query?: APIQuery;
 }
 
 /**
@@ -45,6 +62,7 @@ export interface ReportResult {
     model: string;
     generatedAt: Date;
     recordCount: number;
+    ingestionMethod?: "file" | "api" | "database" | "stream";
   };
 }
 
@@ -73,6 +91,82 @@ export class ReportEngine {
   }
 
   /**
+   * Ingest data using the appropriate method (file or API)
+   *
+   * @param plugin - Plugin instance
+   * @param options - Ingestion options
+   * @returns Bundle with ingested data
+   * @throws {UnsupportedIngestionError} If plugin doesn't support requested method
+   */
+  async ingestData(
+    plugin: FrameworkPlugin,
+    options: DataIngestionOptions
+  ): Promise<Bundle<any>> {
+    const capabilities = plugin.getIngestionCapabilities();
+
+    if (options.type === "file") {
+      // Validate file ingestion support
+      if (!capabilities.file) {
+        throw new UnsupportedIngestionError(plugin.id, "file", capabilities);
+      }
+
+      if (!plugin.ingestFromFile) {
+        throw new Error(
+          `Plugin "${plugin.id}" declares file support but doesn't implement ingestFromFile()`
+        );
+      }
+
+      if (!options.filePath) {
+        throw new Error("filePath is required for file ingestion");
+      }
+
+      console.log(`[ReportEngine] Ingesting from file: ${options.filePath}`);
+      return await plugin.ingestFromFile(options.filePath);
+    }
+
+    if (options.type === "api") {
+      // Validate API ingestion support
+      if (!capabilities.api) {
+        throw new UnsupportedIngestionError(plugin.id, "api", capabilities);
+      }
+
+      if (!plugin.ingestFromAPI) {
+        throw new Error(
+          `Plugin "${plugin.id}" declares API support but doesn't implement ingestFromAPI()`
+        );
+      }
+
+      if (!options.query) {
+        throw new Error("query is required for API ingestion");
+      }
+
+      console.log(
+        `[ReportEngine] Ingesting from API with query:`,
+        options.query
+      );
+      const result: APIIngestionResult = await plugin.ingestFromAPI(
+        options.query
+      );
+
+      // Log API metadata
+      if (result.apiMetadata) {
+        console.log(
+          `[ReportEngine] API Response: ${result.apiMetadata.statusCode} (${result.apiMetadata.responseTime}ms)`
+        );
+        if (result.apiMetadata.rateLimit) {
+          console.log(
+            `[ReportEngine] Rate Limit: ${result.apiMetadata.rateLimit.remaining} remaining`
+          );
+        }
+      }
+
+      return result.bundle;
+    }
+
+    throw new Error(`Unknown ingestion type: ${options.type}`);
+  }
+
+  /**
    * Resolve input reference (e.g., "bundle.stats" or "ctx.summary_md")
    */
   private resolveInputReference(
@@ -82,14 +176,12 @@ export class ReportEngine {
     const parts = reference.split(".");
 
     if (parts[0] === "bundle") {
-      // Return the bundle property
       let value: any = context.bundle;
       for (let i = 1; i < parts.length; i++) {
         value = value?.[parts[i]];
       }
       return value;
     } else if (parts[0] === "ctx") {
-      // Return from context (for previously generated variables)
       let value: any = context;
       for (let i = 1; i < parts.length; i++) {
         value = value?.[parts[i]];
@@ -117,7 +209,6 @@ export class ReportEngine {
     const promptTemplate = await fs.readFile(promptPath, "utf-8");
 
     // Build input context for prompt rendering
-    // Start with the bundle's direct properties for easy access
     const promptContext: Record<string, any> = {
       bundle: context.bundle,
       stats: context.bundle.stats,
@@ -125,33 +216,16 @@ export class ReportEngine {
       metadata: context.bundle.metadata,
     };
 
-    // Add resolved inputs with simplified names
+    // Add resolved inputs
     for (const input of varDef.inputs) {
       const value = this.resolveInputReference(input, context);
-
-      // Extract the last part of the path for the key name
-      // e.g., "bundle.samples.main" → "samples"
-      // e.g., "ctx.summary_md" → "summary_md"
       const parts = input.split(".");
       const key =
         parts.length > 2 ? parts[parts.length - 2] : parts[parts.length - 1];
-
-      console.log(
-        `[DEBUG] Processing input "${input}" → key="${key}", value exists: ${!!value}`
-      );
       promptContext[key] = value;
     }
 
-    console.log(
-      `[DEBUG] Final promptContext keys:`,
-      Object.keys(promptContext)
-    );
-    console.log(
-      `[DEBUG] Final promptContext.stats exists:`,
-      !!promptContext.stats
-    );
-
-    // Also add any previously generated variables from context
+    // Add previously generated variables
     for (const [key, value] of Object.entries(context)) {
       if (
         key !== "bundle" &&
@@ -162,15 +236,6 @@ export class ReportEngine {
         promptContext[key] = value;
       }
     }
-
-    console.log(
-      `[DEBUG] About to render. First 300 chars:`,
-      promptTemplate.substring(0, 300)
-    );
-    console.log(
-      `[DEBUG] promptContext.stats.totalArticles =`,
-      promptContext.stats?.totalArticles
-    );
 
     // Render the prompt
     const prompt = env.renderString(promptTemplate, promptContext);
@@ -196,7 +261,6 @@ export class ReportEngine {
         console.warn(
           `  ⚠ Failed to parse JSON for ${varDef.name}, using raw response`
         );
-        // Fallback: try to extract strings from the response
         value = [response.trim()];
       }
     } else if (varDef.type === "markdown") {
@@ -207,6 +271,9 @@ export class ReportEngine {
     return value;
   }
 
+  /**
+   * Generate a report from a bundle
+   */
   async generateReport(
     options: ReportGenerationOptions
   ): Promise<ReportResult> {
@@ -223,11 +290,13 @@ export class ReportEngine {
     const promptsDir = plugin.getPromptsDir();
     const templatesDir = plugin.getTemplatesDir();
 
-    // Get specification from plugin
+    // Get specification
     const specifications = plugin.getSpecifications();
     const specYaml = specifications[specificationId];
     if (!specYaml) {
-      throw new Error(`Specification not found: ${specificationId}`);
+      throw new Error(
+        `Specification "${specificationId}" not found for plugin "${pluginId}"`
+      );
     }
 
     // Parse YAML specification
@@ -239,32 +308,27 @@ export class ReportEngine {
     // Create LLM client
     const llmClient = createLLMClient(llmConfig);
 
-    // Setup Nunjucks for template rendering
+    // Setup Nunjucks
     const env = nunjucks.configure({
       autoescape: false,
       throwOnUndefined: true,
     });
 
+    // Add custom filters
     env.addFilter("number_format", (num: number) => num.toLocaleString());
     env.addFilter("round", (num: number, decimals: number = 0) =>
       Number(num.toFixed(decimals))
     );
-
-    // Add custom filter to get object keys
     env.addFilter("keys", (obj: any) => {
       if (!obj || typeof obj !== "object") return [];
       return Object.keys(obj);
     });
-
-    // Add custom filter to get top N items from an object sorted by value
     env.addFilter("top_entries", (obj: any, n: number = 10) => {
       if (!obj || typeof obj !== "object") return [];
       return Object.entries(obj)
         .sort(([, a]: any, [, b]: any) => (b as number) - (a as number))
         .slice(0, n);
     });
-
-    // Add custom filter to slice arrays
     env.addFilter("slice", (arr: any[], start: number = 0, end?: number) => {
       if (!Array.isArray(arr)) return [];
       return arr.slice(start, end);
@@ -285,7 +349,7 @@ export class ReportEngine {
       `\n[ReportEngine] Generating report with specification: ${specificationId}`
     );
 
-    // Generate each variable in sequence
+    // Generate each variable
     for (const varDef of spec.variables) {
       const value = await this.generateVariable(
         varDef,
@@ -297,7 +361,7 @@ export class ReportEngine {
       context[varDef.name] = value;
     }
 
-    // Load and render final report template
+    // Render final template
     console.log(`  → Rendering final report template...`);
     const templatePath = path.join(templatesDir, spec.template_file);
     const reportTemplate = await fs.readFile(templatePath, "utf-8");
@@ -312,10 +376,14 @@ export class ReportEngine {
         model: llmConfig.model,
         generatedAt: new Date(),
         recordCount: bundle.records.length,
+        ingestionMethod: bundle.metadata.ingestion_method,
       },
     };
   }
 
+  /**
+   * List all registered plugins
+   */
   listPlugins(): Array<{
     id: string;
     version: string;
@@ -328,10 +396,16 @@ export class ReportEngine {
     }));
   }
 
+  /**
+   * Get plugin information
+   */
   getPluginInfo(pluginId: string): FrameworkPlugin | undefined {
     return this.pluginRegistry.getPlugin(pluginId);
   }
 
+  /**
+   * Register a new plugin
+   */
   registerPlugin(plugin: FrameworkPlugin): void {
     this.pluginRegistry.register(plugin);
   }
