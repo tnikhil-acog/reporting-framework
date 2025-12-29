@@ -92,3 +92,14 @@ export type {
 export { RendererError } from "./renderers/renderer-interface.js";
 export { HTMLRenderer } from "./renderers/html-renderer.js";
 export { PDFRenderer } from "./renderers/pdf-renderer.js";
+export { MDXRenderer } from "./renderers/mdx-renderer.js";
+
+// ============================================================================
+// Components (for MDX templates)
+// ============================================================================
+export * from "./components/index.js";
+
+// ============================================================================
+// Utilities
+// ============================================================================
+export * from "./lib/utils.js";
