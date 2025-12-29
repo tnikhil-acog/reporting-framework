@@ -3,20 +3,17 @@
  *
  * Converts Markdown reports to PDF format using Playwright
  */
-
-import type { Report } from "../types/index.js";
-import type { Renderer, RenderOptions } from "./renderer-interface.js";
 import { RendererError } from "./renderer-interface.js";
 import { HTMLRenderer } from "./html-renderer.js";
 
 /**
  * PDF Renderer implementation using Playwright
  */
-export class PDFRenderer implements Renderer {
-  readonly format = "pdf";
+export class PDFRenderer {
+  format = "pdf";
   private htmlRenderer = new HTMLRenderer();
 
-  async render(report: Report, options: RenderOptions = {}): Promise<Buffer> {
+  async render(report: any, options: any = {}): Promise<Buffer> {
     try {
       // First convert to HTML
       const htmlBuffer = await this.htmlRenderer.render(report, options);
@@ -26,10 +23,25 @@ export class PDFRenderer implements Renderer {
       try {
         const { chromium } = await import("playwright");
 
-        const browser = await chromium.launch({
+        // ✅ Configure launch options for system Chromium
+        const launchOptions: any = {
           headless: true,
-        });
+          args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+          ],
+        };
 
+        // ✅ Use system Chromium if available (Docker environment)
+        const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+        if (executablePath) {
+          launchOptions.executablePath = executablePath;
+          console.log(`[PDFRenderer] Using system Chromium: ${executablePath}`);
+        }
+
+        const browser = await chromium.launch(launchOptions);
         const page = await browser.newPage();
 
         await page.setContent(html, {
@@ -49,16 +61,17 @@ export class PDFRenderer implements Renderer {
 
         await browser.close();
 
+        console.log(`[PDFRenderer] ✓ PDF generated successfully`);
         return Buffer.from(pdf);
       } catch (importError) {
-        // Playwright not available, return HTML with warning
+        // Playwright not available or failed to launch
+        console.error("[PDFRenderer] Error:", importError);
         console.warn(
           "⚠️  Playwright not installed. PDF generation requires Playwright."
         );
         console.warn("   Install with: pnpm add -D playwright");
         console.warn("   Then run: pnpm exec playwright install chromium");
         console.warn("   Falling back to HTML output.");
-
         return htmlBuffer;
       }
     } catch (error) {
