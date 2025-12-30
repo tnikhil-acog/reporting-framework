@@ -5,7 +5,7 @@ A flexible, plugin-based TypeScript framework for generating LLM-powered reports
 ## Table of Contents
 
 - [Features](#features)
-- [What's New in v1.0.9](#whats-new-in-v109)
+- [What's New in v1.0.10](#whats-new-in-v1010)
 - [Installation](#installation)
 - [Core Concepts](#core-concepts)
 - [Quick Start Guide](#quick-start-guide)
@@ -37,7 +37,7 @@ A flexible, plugin-based TypeScript framework for generating LLM-powered reports
 
 ---
 
-## What's New in v1.0.9
+## What's New in v1.0.10
 
 ### 🎨 MDX Rendering with React Components
 
@@ -643,7 +643,7 @@ describe("Report Generation", () => {
 
 ## Changelog
 
-### v1.0.9 (2025-12-30)
+### v1.0.10 (2025-12-30)
 
 - ✨ Added MDXRenderer for React component support
 - ✨ Enhanced PDFRenderer with dual mode (pre-rendered HTML + legacy)
@@ -654,11 +654,11 @@ describe("Report Generation", () => {
 - 🎨 Modern styling with Tailwind-inspired utilities
 - 📝 Updated documentation with MDX examples
 
-### v1.0.8 (2025-12-29)
+### v1.0.9 (2025-12-29)
 
 - 🔧 Fixed PDF renderer functionality
 - 📝 Improved error handling and logging
 
-### v1.0.7 and earlier
+### v1.0.8 and earlier
 
 - Initial releases with core plugin system and LLM integrations
