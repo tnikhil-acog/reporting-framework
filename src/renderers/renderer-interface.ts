@@ -10,28 +10,24 @@ import type { Report } from "../types";
  * Options for rendering
  */
 export interface RenderOptions {
-  /** CSS styles to apply (for HTML/PDF) */
   styles?: string;
 
-  /** Page size for PDF (e.g., 'A4', 'Letter') */
-  pageSize?: string;
+  // ✅ NEW: Pre-rendered HTML content (for PDF generation from MDX/HTML)
+  htmlContent?: string;
 
-  /** Page margins */
-  margins?: {
+  // PDF-specific options
+  pdfFormat?: "A4" | "Letter" | "Legal" | "A3" | "A5";
+  pdfMargin?: {
     top?: string;
     right?: string;
     bottom?: string;
     left?: string;
   };
-
-  /** Include table of contents */
-  includeToc?: boolean;
-
-  /** Custom template path */
-  templatePath?: string;
-
-  /** Additional options */
-  [key: string]: any;
+  printBackground?: boolean;
+  preferCSSPageSize?: boolean;
+  displayHeaderFooter?: boolean;
+  headerTemplate?: string;
+  footerTemplate?: string;
 }
 
 /**
